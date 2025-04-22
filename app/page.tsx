@@ -1,103 +1,248 @@
-import Image from "next/image";
+'use client'
+import { AudioRecorder } from "@/components/functional/recorder";
+import { useState, useEffect } from "react";
+import { AudioPlayer } from "@/components/functional/audio-player";
+import { transcribeAudio } from "@/actions/transcribe";
+import { Button } from "@/components/ui/button";
+
+// Define types for transcription result
+type TranscriptionResult = {
+  text: string;
+  durationInSeconds: number;
+  segments: any[];
+  language: string;
+};
+
+type TranscriptionError = {
+  error: string;
+};
+
+// Helper function to ensure type safety
+function isTranscriptionError(result: any): result is TranscriptionError {
+  return 'error' in result;
+}
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [transcription, setTranscription] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Clean up the URL when component unmounts
+  useEffect(() => {
+    return () => {
+      if (audioUrl) {
+        URL.revokeObjectURL(audioUrl);
+      }
+    };
+  }, [audioUrl]);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+  const handleRecordingComplete = async (blob: Blob) => {
+    // Revoke previous URL to prevent memory leaks
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+    }
+    
+    // Save the blob for later use
+    setAudioBlob(blob);
+    
+    // Create a URL for the audio player
+    const url = URL.createObjectURL(blob);
+    console.log("Created URL for blob:", url, "with type:", blob.type, "size:", blob.size);
+    setAudioUrl(url);
+    
+    // Create a file from the blob - maintain the original blob type
+    // This ensures the file format is correctly preserved
+    const fileExtension = blob.type.includes('webm') ? 'webm' : 
+                         blob.type.includes('mp3') ? 'mp3' : 
+                         blob.type.includes('wav') ? 'wav' : 'mp3';
+                         
+    console.log(`Using extension: ${fileExtension} based on type: ${blob.type}`);
+    
+    const audioFile = new File([blob], `recording.${fileExtension}`, { 
+      type: blob.type || `audio/${fileExtension}` 
+    });
+    
+    // Process the file for transcription
+    await handleFileSelected(audioFile);
+  };
+  
+  const handleFileSelected = async (file: File) => {
+    setIsProcessing(true);
+    setError(null);
+
+    try {
+      console.log(`Processing file: ${file.name}, type: ${file.type}, size: ${file.size} bytes`);
+      
+      const formData = new FormData();
+      formData.append("audio", file);
+
+      const result = await transcribeAudio(formData);
+
+      if (isTranscriptionError(result)) {
+        // Result is an error
+        const errorResult = result as TranscriptionError;
+        setError(errorResult.error);
+        setTranscription(null);
+      } else {
+        // Result is a successful transcription
+        const transcriptionResult = result as TranscriptionResult;
+        // Ensure we always have a string
+        if (typeof transcriptionResult.text === 'string') {
+          setTranscription(transcriptionResult.text);
+        } else {
+          setTranscription("Transcription successful but no text was returned");
+        }
+        setError(null);
+      }
+    } catch (err) {
+      console.error("Error processing file:", err);
+      setError("Failed to process file");
+      setTranscription(null);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+  
+  // Function to test with sample audio
+  const handleTestSampleAudio = async () => {
+    try {
+      // Use a well-known sample MP3
+      const sampleAudioUrl = "https://download.samplelib.com/mp3/sample-3s.mp3";
+      
+      // Fetch the sample audio to create a proper file
+      const response = await fetch(sampleAudioUrl);
+      const audioBlob = await response.blob();
+      
+      // Save the blob for playback
+      setAudioBlob(audioBlob);
+      
+      // Create a URL for the audio player
+      const url = URL.createObjectURL(audioBlob);
+      setAudioUrl(url);
+      
+      // Create a file from the blob
+      const audioFile = new File([audioBlob], "sample-audio.mp3", { type: "audio/mp3" });
+      
+      // Process the file
+      await handleFileSelected(audioFile);
+    } catch (error) {
+      console.error("Sample audio error:", error);
+      setError("Error processing sample audio");
+    }
+  };
+  
+  // Use server-side test audio directly
+  const handleUseTestAudio = async () => {
+    setIsProcessing(true);
+    setError(null);
+    
+    try {
+      // Create a FormData with only the useTestAudio flag
+      const formData = new FormData();
+      formData.append("useTestAudio", "true");
+      
+      const result = await transcribeAudio(formData);
+      
+      if (isTranscriptionError(result)) {
+        setError(result.error);
+        setTranscription(null);
+      } else {
+        // Ensure we always have a string
+        if (typeof result.text === 'string') {
+          setTranscription(result.text);
+        } else {
+          setTranscription("Transcription successful but no text was returned");
+        }
+        setError(null);
+      }
+    } catch (err) {
+      console.error("Error using test audio:", err);
+      setError("Failed to transcribe test audio");
+      setTranscription(null);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-white container mx-auto px-4">
+      <div className="py-8">
+        <AudioRecorder 
+          onRecordingComplete={handleRecordingComplete}
+          onStreamingTranscription={() => {}}
+          isProcessing={isProcessing}
+        />
+        
+        <div className="mt-6 flex justify-center gap-4">
+          <Button 
+            onClick={handleTestSampleAudio}
+            disabled={isProcessing}
+            variant="outline"
+            className="text-sm"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            Test with Sample Audio
+          </Button>
+          
+          <Button 
+            onClick={handleUseTestAudio}
+            disabled={isProcessing}
+            variant="secondary"
+            className="text-sm bg-green-100 hover:bg-green-200"
           >
-            Read our docs
-          </a>
+            Use Server Test Audio
+          </Button>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+        
+        {error && (
+          <div className="mt-4 flex justify-center">
+            <Button
+              onClick={handleUseTestAudio}
+              variant="destructive"
+              size="sm"
+              className="text-xs"
+            >
+              Transcription Failed - Try with Server Audio Instead
+            </Button>
+          </div>
+        )}
+        
+        {audioUrl && (
+          <div className="mt-10">
+            <AudioPlayer audioUrl={audioUrl} />
+            <div className="mt-4 text-center">
+              <a 
+                href={audioUrl}
+                download={audioBlob?.type.includes('webm') ? "recording.webm" : "recording.mp3"}
+                className="text-sm text-zinc-600 hover:text-zinc-900 underline"
+              >
+                Download Recording
+              </a>
+            </div>
+          </div>
+        )}
+        
+        {isProcessing && (
+          <div className="mt-10 p-4 bg-gray-50 rounded-xl flex items-center justify-center">
+            <div className="animate-pulse">Transcribing audio...</div>
+          </div>
+        )}
+        
+        {error && !isProcessing && (
+          <div className="mt-10 p-4 bg-red-50 rounded-xl">
+            <h3 className="text-lg font-medium text-red-800 mb-2">Error</h3>
+            <p className="text-red-700">{error}</p>
+          </div>
+        )}
+        
+        {!isProcessing && transcription && (
+          <div className="mt-10 p-4 bg-gray-50 rounded-xl">
+            <h3 className="text-lg font-medium mb-2">Transcription</h3>
+            <p className="text-gray-700">{transcription}</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
